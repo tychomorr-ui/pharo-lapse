@@ -17,7 +17,7 @@ The 11-node mesh is a constellation of role-assigned nodes. Each node has one jo
 | Tesseract-Terminus | Provenance · anchoring |
 | XinUS-Clarity | Flagship application layer |
 | Monarch-OS | Sovereign OS layer · Kether-Gate |
-| Tesseract-A | Truth substrate · truth point |
+| Tesseract-A | Recovery Mirror |
 | KEIRA | Intelligence · truth analysis |
 | Valkyrie | Adjudication entity |
 | Archangel | Control plane |
