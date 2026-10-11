@@ -5,6 +5,17 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import urllib.request, urllib.error
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from cryptochrome.consensus import outbox_depths
+    from cryptochrome.heading import synthesize_heading
+except ImportError:  # direct execution from reference/ remains compatible
+    outbox_depths = None
+    synthesize_heading = None
+
 HOME = Path.home()
 DB = HOME / ".nexinus-queue.db"
 IDENT = HOME / ".nexinus-wg-proof"
@@ -123,7 +134,29 @@ def attempt_delivery(conn, row):
         return "pending"
 
 
-def deliver_loop(conn, once=False):
+def cryptochrome_snapshot(conn, recipient_peer_id):
+    """Emit a real sensor snapshot without changing legacy routing semantics."""
+    if outbox_depths is None or synthesize_heading is None:
+        raise RuntimeError("cryptochrome package is not importable from this checkout")
+    peers = {r[0] for r in conn.execute("SELECT peer_id FROM peers ORDER BY peer_id")}
+    depths = outbox_depths(DB)
+    heading = synthesize_heading(
+        reachable_peer_ids=peers,
+        arrival_history={},
+        queue_depths=depths,
+        recipient_peer_id=recipient_peer_id,
+    )
+    print("CRYPTOCHROMETER", {
+        "reachable_peers": sorted(peers),
+        "outbox_depths": depths,
+        "recipient": recipient_peer_id,
+        "selected_transit_peer": heading.selected_peer,
+        "reason": heading.reason,
+    })
+    return heading
+
+
+def deliver_loop(conn, once=False, cryptochrome=False):
     while True:
         now = iso_now()
         rows = conn.execute("""SELECT msg_id, peer_id, envelope_json, attempts FROM outbox
@@ -135,6 +168,8 @@ def deliver_loop(conn, once=False):
             time.sleep(5)
             continue
         for row in rows:
+            if cryptochrome:
+                cryptochrome_snapshot(conn, row[1])
             attempt_delivery(conn, row)
         if once:
             return
@@ -148,6 +183,7 @@ Usage:
   python3 nexinus_queue.py add <peer_id> "<body>"
   python3 nexinus_queue.py deliver            # loop forever
   python3 nexinus_queue.py deliver --once     # one pass
+  python3 nexinus_queue.py deliver --once --cryptochrome  # sensor snapshot + delivery
   python3 nexinus_queue.py status
   python3 nexinus_queue.py pending
   python3 nexinus_queue.py inbox
@@ -169,7 +205,7 @@ if __name__ == "__main__":
         conn.commit()
         print(f"PEER {sys.argv[2]} -> {sys.argv[3]}:{sys.argv[4]}")
     elif cmd == "deliver":
-        deliver_loop(conn, once=("--once" in sys.argv))
+        deliver_loop(conn, once=("--once" in sys.argv), cryptochrome=("--cryptochrome" in sys.argv))
     elif cmd == "status":
         for r in conn.execute("SELECT state, COUNT(*) FROM outbox GROUP BY state"):
             print(f"{r[0]}: {r[1]}")
