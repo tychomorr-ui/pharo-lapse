@@ -1,0 +1,113 @@
+{
+  "manifest_version": "0.1",
+  "dimension": "4",
+  "status": "PENDING_APPLY",
+  "source": "spec/ARCHANGEL-INTEGRATION-v0.2.md#the-constellation",
+  "assumptions": [
+    "The canonical peer_id values are lowercase ASCII kebab-case renderings of the eleven Constellation names in ARCHANGEL-INTEGRATION-v0.2.md; the source does not define peer_id strings.",
+    "locus is PENDING_OPERATOR_HARDWARE for every node because no operator-controlled hardware, host, port, or Manus-project binding was verified in this task.",
+    "Each empty via_peer_ids array is an unconfigured placeholder, not evidence of direct reachability. Route selection must be populated and pinned only after out-of-band peer registration.",
+    "PENDING_KEY is a literal placeholder. It is not an Ed25519 public key and must not be used to authenticate a peer."
+  ],
+  "nodes": [
+    {
+      "peer_id": "root-gate",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Identity anchor \u00b7 front door",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Root-Gate"
+    },
+    {
+      "peer_id": "tesseract-terminus",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Provenance \u00b7 anchoring",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Tesseract-Terminus"
+    },
+    {
+      "peer_id": "xinus-clarity",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Flagship application layer",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "XinUS-Clarity"
+    },
+    {
+      "peer_id": "monarch-os",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Sovereign OS layer \u00b7 Kether-Gate",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Monarch-OS"
+    },
+    {
+      "peer_id": "tesseract-a",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Recovery Mirror",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Tesseract-A"
+    },
+    {
+      "peer_id": "keira",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Intelligence \u00b7 truth analysis",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "KEIRA"
+    },
+    {
+      "peer_id": "valkyrie",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Adjudication entity",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Valkyrie"
+    },
+    {
+      "peer_id": "archangel",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Control plane",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Archangel"
+    },
+    {
+      "peer_id": "project-reclaim",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Field activation",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Project Reclaim"
+    },
+    {
+      "peer_id": "iwa-sage",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Community wellness",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "IWA Sage"
+    },
+    {
+      "peer_id": "resonate-earth",
+      "locus": "PENDING_OPERATOR_HARDWARE",
+      "role": "Public front door",
+      "public_key": "PENDING_KEY",
+      "via_peer_ids": [],
+      "status": "PENDING_APPLY",
+      "constellation_name": "Resonate Earth"
+    }
+  ]
+}

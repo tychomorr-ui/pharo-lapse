@@ -1,0 +1,311 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local pre-submission Internet-Draft candidate.
+  This file has not been submitted to the IETF Datatracker and has no IETF
+  publication status.  The IPR value is deliberately "none" pending a
+  responsible contributor's selection during an actual submission.
+-->
+<rfc version="3" ipr="none"
+     submissionType="independent" category="info"
+     docName="draft-morris-pharo-lapse-00" sortRefs="true" symRefs="true"
+     tocInclude="true" tocDepth="3">
+  <front>
+    <title abbrev="Pharo-Lapse">Pharo-Lapse: Signed Store-and-Forward Delivery over Intermittent IP Networks</title>
+    <seriesInfo name="Internet-Draft" value="draft-morris-pharo-lapse-00"/>
+    <author fullname="Tyler Morris" initials="T." surname="Morris">
+      <organization>Nexinus RI Systems LLC</organization>
+    </author>
+    <date day="11" month="October" year="2026"/>
+    <area>Internet</area>
+    <keyword>store and forward</keyword>
+    <keyword>message delivery</keyword>
+    <keyword>Ed25519</keyword>
+    <keyword>WireGuard</keyword>
+    <keyword>content addressing</keyword>
+    <abstract>
+      <t>Pharo-Lapse is a store-and-forward protocol for signed, pairwise message delivery between devices whose IP paths may be intermittent or unavailable. It specifies durable endpoint and relay queues, content-addressed and Ed25519-signed envelopes, recipient deduplication, signed acknowledgments, bounded multi-hop forwarding, deterministic route selection, logical lapse ordering, and phase-anchored signatures. It operates above a carrier that provides IP connectivity and does not require the public Internet, a cloud broker, a certificate authority, or a central routing service. This document defines version 1.1.0 of the protocol and its direct-delivery compatibility behavior for version 1.0 peers.</t>
+    </abstract>
+    <note>
+      <name>Local Pre-Submission Status</name>
+      <t>This is a locally prepared Internet-Draft candidate, not an IETF Datatracker submission or an IETF publication. It has not been uploaded, accepted, assigned a Datatracker URL, or confirmed by email. The Internet-Draft boilerplate and IPR declaration appropriate to an actual submission must be selected and affirmed by an authorized contributor before submission.</t>
+    </note>
+  </front>
+  <middle>
+    <section anchor="introduction" numbered="true">
+      <name>Introduction and Scope</name>
+      <t>Conventional delivery systems commonly depend on a continuously available path, a reachable server, or a certificate authority. Pharo-Lapse instead treats a path as an opportunity that may appear and disappear. A sender, recipient, and an optional transit peer retain the state needed to retry delivery after interruption.</t>
+      <t>The protocol is above the transport and below an application. It can use Wi-Fi, Ethernet, cellular, satellite, or local mesh radio when that carrier offers IP connectivity. A WireGuard overlay is one supported carrier configuration; the protocol does not define or replace WireGuard. Every peer is symmetric and can initiate delivery to a pinned peer with an out-of-band-established overlay address.</t>
+      <t>Pharo-Lapse provides end-to-end integrity and provenance, durable store-and-forward delivery, bounded forwarding, and at-most-once recipient application processing. It does not provide confidentiality, anonymity, broadcast or multicast, real-time delivery guarantees, a distributed consensus mechanism, endpoint-compromise resistance, or transport denial-of-service prevention. Transport-layer confidentiality, when needed, is supplied separately.</t>
+      <section anchor="design-goals" numbered="true">
+        <name>Design Goals</name>
+        <ul>
+          <li>Messages submitted to an outbox are eventually acknowledged or placed in a policy terminal state; they are not silently dropped.</li>
+          <li>A recipient processes a given <tt>msg_id</tt> at most once despite retransmission or forwarding.</li>
+          <li>An origin signature binds the sender, final recipient, payload, message identifier, phase anchor, and origin route parameters.</li>
+          <li>A permitted relay can forward independently of a broker, certificate authority, or central routing service.</li>
+          <li>Routes are bounded and loop-free, and delivery decisions are reproducible from the same canonical state, phase, and lapse.</li>
+          <li>Process death, crash, and restart do not cause loss or duplicate application processing.</li>
+        </ul>
+      </section>
+    </section>
+
+    <section anchor="conventions" numbered="true">
+      <name>Conventions and Terminology</name>
+      <t>The key words <bcp14>MUST</bcp14>, <bcp14>MUST NOT</bcp14>, <bcp14>SHOULD</bcp14>, <bcp14>SHOULD NOT</bcp14>, and <bcp14>MAY</bcp14> in this document are to be interpreted as described in <xref target="RFC2119"/>.</t>
+      <dl newline="false" spacing="normal">
+        <dt>Peer:</dt><dd>A device with a canonical identity: a stable <tt>peer_id</tt> and long-term Ed25519 public key.</dd>
+        <dt>Envelope:</dt><dd>The signed wire-format message specified in <xref target="wire-format"/>.</dd>
+        <dt>Origin envelope:</dt><dd>The sender-created immutable message content and sender signature.</dd>
+        <dt>Forwarding record:</dt><dd>A relay's signed, append-only acceptance record for another peer's envelope.</dd>
+        <dt>Outbox:</dt><dd>A durable on-disk queue for messages awaiting delivery or acknowledgment.</dd>
+        <dt>Inbox:</dt><dd>A durable table for messages received and verified at least once.</dd>
+        <dt>Ack:</dt><dd>A signed envelope of type <tt>ack</tt> returned by the final recipient after successful delivery.</dd>
+        <dt>Lapse:</dt><dd>A monotonic logical ordering unit local to a peer. Operations in one lapse are simultaneous; different lapses are ordered.</dd>
+        <dt>Phase:</dt><dd>The mesh operating mode <tt>DAY</tt>, <tt>NIGHT</tt>, or <tt>TWILIGHT</tt>, derived from observed peer reachability rather than a wall clock.</dd>
+        <dt>CID:</dt><dd>A Content Identifier. This protocol uses CIDv1 with dag-json codec and sha2-256 multihash.</dd>
+        <dt>Origin CID:</dt><dd>The CID of immutable origin content and its sender signature. It remains stable across forwarding.</dd>
+        <dt>Pin:</dt><dd>A public key stored locally by an operator for verification of inbound signatures. Pins are established out of band.</dd>
+        <dt>Transit peer:</dt><dd>A relay that accepts and forwards a valid envelope without becoming the final recipient.</dd>
+      </dl>
+    </section>
+
+    <section anchor="architecture" numbered="true">
+      <name>Architecture and Peer Configuration</name>
+      <t>A local peer configuration maps <tt>peer_id</tt> to overlay IP address, port, and pinned public key. The mapping and pins are established out of band. A direct delivery has one origin-to-recipient path. A multi-hop delivery has one or more transit peers. Before attempting a next hop, a transit peer durably stores the full envelope and its own forwarding record. It verifies, but neither decrypts nor re-signs, origin content.</t>
+      <t>The reference deployment uses HTTP/1.0 over a WireGuard overlay. HTTP/1.1 or HTTP/2 can be used instead. The only required application endpoint is a POST to <tt>/inbox</tt>. WireGuard uses Curve25519/Noise-based secure transport construction and UDP encapsulation; its transport security is separate from the envelope-level signatures and content addressing in this document <xref target="WIREGUARD"/>. Implementations are not constrained to one storage engine, programming language, or HTTP version.</t>
+    </section>
+
+    <section anchor="wire-format" numbered="true">
+      <name>Envelope Wire Format</name>
+      <section anchor="envelope-fields" numbered="true">
+        <name>Envelope Fields and Version Behavior</name>
+        <t>An envelope is a canonical JSON object. The following fields form version 1.1.0. A recipient validates the types and bounds in addition to the signing and CID rules below.</t>
+        <dl newline="false" spacing="normal">
+          <dt><tt>msg_id</tt>:</dt><dd>Required UUID version 4 string uniquely identifying a message.</dd>
+          <dt><tt>created_at</tt>:</dt><dd>Required ISO 8601 UTC creation timestamp.</dd>
+          <dt><tt>sender_peer_id</tt> and <tt>recipient_peer_id</tt>:</dt><dd>Required canonical origin and final-recipient identities.</dd>
+          <dt><tt>body</tt>:</dt><dd>Required message payload string of at most 4096 characters.</dd>
+          <dt><tt>phase</tt>:</dt><dd>Required <tt>DAY</tt>, <tt>NIGHT</tt>, or <tt>TWILIGHT</tt> string.</dd>
+          <dt><tt>lapse</tt>:</dt><dd>Required integer, monotonic for the sender.</dd>
+          <dt><tt>phase_anchor</tt>:</dt><dd>Required in version 1.1.0. It is <tt>PHARO-LAPSE-PHASE/1|&lt;phase&gt;|&lt;lapse&gt;</tt>.</dd>
+          <dt><tt>prev_cid</tt>:</dt><dd>Required CID of the sender's prior envelope, or JSON null for its first envelope.</dd>
+          <dt><tt>type</tt>:</dt><dd>Required value <tt>message</tt>, <tt>ack</tt>, or <tt>ping</tt>.</dd>
+          <dt><tt>route_history</tt>:</dt><dd>Required in version 1.1.0 ordered array of accepting peer IDs, beginning with the origin sender.</dd>
+          <dt><tt>max_hops</tt>:</dt><dd>Required in version 1.1.0 integer from 1 through 64. It is the maximum number of transit acceptances after the origin.</dd>
+          <dt><tt>origin_cid</tt>:</dt><dd>Required in version 1.1.0 stable CID of immutable origin content.</dd>
+          <dt><tt>sig</tt>:</dt><dd>Required base64-encoded Ed25519 origin signature over the origin signing domain.</dd>
+          <dt><tt>forwarding</tt>:</dt><dd>Optional append-only array with one signed record per transit acceptance.</dd>
+          <dt><tt>cid</tt>:</dt><dd>Required CIDv1 of the complete current envelope excluding this field.</dd>
+          <dt><tt>hw_bound</tt>:</dt><dd>Required when the identity key was generated in software because no suitable hardware module was available. It records false in that case. A receiving peer can apply stricter policy to this condition.</dd>
+        </dl>
+        <t>A version 1.0 peer that does not understand an extension <bcp14>MUST</bcp14> treat an envelope as a version 1.0 direct-delivery envelope only when both <tt>route_history</tt> and <tt>max_hops</tt> are absent. Otherwise, it <bcp14>MUST</bcp14> return an unsupported-extension error without processing the body. Version 1.0 defaults are <tt>phase_anchor = PHARO-LAPSE-PHASE/1|&lt;phase&gt;|&lt;lapse&gt;</tt>, <tt>route_history = [sender_peer_id]</tt>, <tt>max_hops = 1</tt>, and <tt>origin_cid = cid</tt> computed over the version 1.0 envelope. A version 1.1.0 implementation <bcp14>MUST NOT</bcp14> silently apply those defaults to a malformed version 1.1.0 envelope that advertises an unsupported version.</t>
+      </section>
+      <section anchor="canonical-json" numbered="true">
+        <name>Canonical JSON</name>
+        <t>All object keys are sorted lexicographically by Unicode code point. The encoding is UTF-8. There is no insignificant whitespace. Non-ASCII characters remain UTF-8. Numbers use ECMAScript <tt>Number.prototype.toString()</tt> representation for the values used by this protocol, and arrays retain their order. An implementation <bcp14>MUST</bcp14> reject duplicate JSON object keys before canonicalization. Every signature and CID calculation uses this exact serialization.</t>
+      </section>
+      <section anchor="signing-cid-domains" numbered="true">
+        <name>Signing and CID Domains</name>
+        <t>The origin signing domain is the canonical object containing every envelope field except <tt>sig</tt>, <tt>cid</tt>, <tt>forwarding</tt>, and <tt>route_history</tt>. It includes <tt>phase</tt>, <tt>lapse</tt>, <tt>phase_anchor</tt>, <tt>max_hops</tt>, and <tt>origin_cid</tt> when present. The origin signature therefore binds the message, final recipient, phase, lapse, and hop budget but not mutable transit history.</t>
+        <t>For version 1.1.0, <tt>origin_cid</tt> is the CIDv1 of the origin signing-domain object together with origin <tt>route_history</tt> and <tt>max_hops</tt>, before a forwarding record is added. It <bcp14>MUST</bcp14> remain unchanged at every hop. The current envelope CID is the CIDv1 dag-json sha2-256 digest of the complete current envelope without the <tt>cid</tt> field. A relay <bcp14>MUST</bcp14> recompute the current CID after adding a forwarding record, and a recipient <bcp14>MUST</bcp14> verify both CIDs. CIDv1 is a self-describing, cryptographically content-addressed identifier <xref target="CID"/>. A version 1.0 envelope retains its version 1.0 signing and CID input: its complete envelope without <tt>cid</tt>.</t>
+      </section>
+      <section anchor="ack-envelope" numbered="true">
+        <name>Acknowledgment Envelope</name>
+        <t>An ack has <tt>type</tt> equal to <tt>ack</tt>. Its <tt>body</tt> contains <tt>acked_msg_id</tt>, <tt>acked_origin_cid</tt>, <tt>stored_at</tt>, and <tt>route_history</tt>. The final recipient signs it. The sender <bcp14>MUST</bcp14> verify the ack signature against the pinned recipient key and <bcp14>MUST</bcp14> verify that <tt>acked_msg_id</tt>, <tt>acked_origin_cid</tt>, and the route binding match the outbound message.</t>
+      </section>
+      <section anchor="forwarding-record" numbered="true">
+        <name>Forwarding Record</name>
+        <t>A forwarding record has <tt>peer_id</tt>, <tt>accepted_at</tt> as an ISO 8601 UTC timestamp, relay <tt>lapse</tt>, <tt>previous_cid</tt>, <tt>next_peer_id</tt>, the relay phase anchor, and a base64 Ed25519 <tt>sig</tt>. Its signature covers the record without <tt>sig</tt> using the relay's pinned identity. A record is appended atomically with the relay's durable queue insert.</t>
+        <t>A relay <bcp14>MUST NOT</bcp14> modify <tt>body</tt>, <tt>sender_peer_id</tt>, <tt>recipient_peer_id</tt>, <tt>phase</tt>, <tt>phase_anchor</tt>, <tt>lapse</tt>, <tt>prev_cid</tt>, <tt>type</tt>, <tt>max_hops</tt>, or <tt>origin_cid</tt>.</t>
+      </section>
+    </section>
+
+    <section anchor="identity-integrity" numbered="true">
+      <name>Identity and Integrity Rules</name>
+      <t>Every conforming implementation applies the following rules.</t>
+      <section anchor="hardware-identity" numbered="true">
+        <name>Hardware-Bound Identity</name>
+        <t>A peer <bcp14>MUST</bcp14> generate its long-term Ed25519 keypair in a hardware security module, TPM, StrongBox, Secure Enclave, or equivalent when one is available. The private key <bcp14>MUST NOT</bcp14> be held in general-purpose memory or storage, and signing operations <bcp14>MUST</bcp14> be performed by that module. If no such module is available, software generation is permitted only with the <tt>hw_bound: false</tt> indication described in <xref target="envelope-fields"/>. Peers can enforce stricter local policy for non-hardware-bound identities.</t>
+      </section>
+      <section anchor="signed-content-addressed" numbered="true">
+        <name>Signed and Content-Addressed Messages</name>
+        <t>Every envelope <bcp14>MUST</bcp14> carry a valid origin signature and a CID. The recipient verifies the origin signature using the sender's pin before application processing, recomputes both <tt>origin_cid</tt> and current <tt>cid</tt>, and compares them. On failure, the recipient <bcp14>MUST</bcp14> discard the envelope and return an error response. Ed25519 signing and verification are specified by <xref target="RFC8032"/>.</t>
+      </section>
+    </section>
+
+    <section anchor="durable-delivery" numbered="true">
+      <name>Durable Queues, Retry, and Deduplication</name>
+      <section anchor="queues-retry" numbered="true">
+        <name>Queue and Retry Requirements</name>
+        <t>Every peer <bcp14>MUST</bcp14> maintain durable outbox and inbox storage. A transit peer <bcp14>MUST</bcp14> write an accepted envelope and forwarding record before the next-hop attempt. On process start, every outbox entry in <tt>inflight</tt> state <bcp14>MUST</bcp14> reset to <tt>pending</tt> and be retried.</t>
+        <t>The retry schedule <bcp14>MUST</bcp14> be non-decreasing and <bcp14>MUST NOT</bcp14> retry a given message faster than once every 10 seconds. The reference schedule is 30, 60, 120, 240, 480, and 600 seconds with plus-or-minus 10 percent jitter, capped at 600 seconds. An implementation can use another schedule that meets these properties. The maximum attempt count <bcp14>SHOULD</bcp14> be 20, after which a message <bcp14>MUST</bcp14> be marked <tt>dead</tt> and must not be automatically retried. The default message TTL <bcp14>SHOULD</bcp14> be 72 hours; after expiry it <bcp14>MUST</bcp14> be marked <tt>expired</tt>.</t>
+        <t>Outbox states are <tt>pending</tt> (waiting for its next attempt), <tt>inflight</tt> (currently transmitting), <tt>acked</tt> (terminal delivery confirmation), <tt>dead</tt> (terminal failure or maximum attempts), and <tt>expired</tt> (terminal TTL expiry). A transit queue retains the origin CID, current envelope CID, next peer, and forwarding record that created its entry. Deleting a transit record before final ack is non-conforming.</t>
+      </section>
+      <section anchor="dedup" numbered="true">
+        <name>Deduplication</name>
+        <t>The final recipient <bcp14>MUST</bcp14> keep a persistent inbox keyed by <tt>msg_id</tt>. A transit peer <bcp14>MUST</bcp14> keep a persistent transit table keyed by the tuple (<tt>msg_id</tt>, <tt>origin_cid</tt>). A peer performs its applicable lookup before expensive signature verification. A duplicate final delivery returns the cached ack; a duplicate transit delivery returns the cached forwarding result. A duplicate <bcp14>MUST NOT</bcp14> invoke application processing or a second forwarding action.</t>
+      </section>
+      <section anchor="crash-recovery" numbered="true">
+        <name>Crash Recovery</name>
+        <t>Before any other process-start operation, the outbox applies the equivalent of the following statements:</t>
+        <sourcecode type="sql"><![CDATA[
+UPDATE outbox
+SET state = 'pending', last_error = 'recovered from crash'
+WHERE state = 'inflight';
+
+UPDATE outbox
+SET state = 'expired'
+WHERE state = 'pending' AND expires_at < now();
+]]></sourcecode>
+        <t>Transit stores apply equivalent recovery to forwarding records whose next-hop attempt was interrupted. This ensures interrupted messages are retried and messages past TTL are not retried.</t>
+      </section>
+    </section>
+
+    <section anchor="forwarding-routing" numbered="true">
+      <name>Forwarding, Lapse, Phase, and Routes</name>
+      <section anchor="bounded-forwarding" numbered="true">
+        <name>Bounded, Loop-Free Forwarding</name>
+        <t>A peer can act as a transit peer only when its registry permits transit and it has a reachable next hop. Before accepting a transit envelope, it <bcp14>MUST</bcp14> verify the origin signature, origin CID, current CID, and all prior forwarding records; confirm that the local peer is absent from <tt>route_history</tt>; confirm that <tt>len(route_history) - 1 &lt; max_hops</tt> before local acceptance; confirm that the proposed next peer is absent from the route and is not an excluded peer under applicable recipient policy; and confirm that the envelope's recipient is not local unless this is final delivery.</t>
+        <t>The relay appends its own ID and exactly one forwarding record, persists the new current CID, and queues the next-hop transmission. It <bcp14>MUST</bcp14> reject a repeated route with <tt>LOOP_DETECTED</tt> and a route beyond budget with <tt>MAX_HOPS_EXCEEDED</tt>. Such a rejection <bcp14>MUST NOT</bcp14> mutate the application inbox.</t>
+      </section>
+      <section anchor="phase-model" numbered="true">
+        <name>Phase Model and Phase-Anchored Signing</name>
+        <t>Phase is the local peer's observed reachability state, not a wall-clock property. Let P be its pinned peers and R the members of P responding to keepalives in the preceding 60 seconds. The phase is <tt>DAY</tt> if R/P is at least 0.5, <tt>NIGHT</tt> if R/P is less than 0.25, and <tt>TWILIGHT</tt> otherwise. The reference probe intervals are 25 seconds for DAY, 300 seconds for NIGHT, and 120 seconds for TWILIGHT. NIGHT applies a long retry schedule of five times the base; DAY uses a short schedule and TWILIGHT an intermediate schedule.</t>
+        <t>Phase transitions <bcp14>MUST</bcp14> be hysteretic. A single missing response <bcp14>MUST NOT</bcp14> cause a DAY-to-NIGHT transition. The reference implementation uses three consecutive below-threshold lapses to enter NIGHT and one successful pinned-peer response to move from NIGHT to DAY.</t>
+        <t>An origin envelope <bcp14>MUST</bcp14> contain exactly <tt>PHARO-LAPSE-PHASE/1|&lt;phase&gt;|&lt;lapse&gt;</tt> in <tt>phase_anchor</tt>. The origin signature covers the phase, lapse, and anchor together, and a verifier <bcp14>MUST</bcp14> reject a non-recomputing string. A forwarding record similarly contains and signs its relay phase anchor using its own lapse and observed phase. A relay <bcp14>MUST NOT</bcp14> rewrite an origin phase or lapse; it records its own phase only in the forwarding record and applies that phase to local next-hop scheduling.</t>
+      </section>
+      <section anchor="lapse-route-discipline" numbered="true">
+        <name>Lapse and Route Discipline</name>
+        <t>A lapse increments on each successful delivery attempt, each received envelope, and each phase transition. It is a peer-local logical clock; peers can have different lapse values at the same wall-clock moment. Envelopes from the same sender <bcp14>MUST</bcp14> have strictly increasing lapse. An envelope whose lapse is less than or equal to the highest previous lapse from that sender is a stale replay and <bcp14>MUST</bcp14> be rejected, except a duplicate with a previously accepted <tt>msg_id</tt> follows <xref target="dedup"/>. The lapse at signing is included in every receipt; replaying a receipt at a different lapse is invalid.</t>
+        <t>The first route-history entry <bcp14>MUST</bcp14> equal <tt>sender_peer_id</tt>. Each transit acceptance appends exactly one ID. The final recipient can append its ID while storing the message, but if it does it <bcp14>MUST</bcp14> do so before calculating the ack route binding. An ID can appear at most once. The <tt>max_hops</tt> value counts transit acceptances after the origin and before final delivery: a value of 1 permits direct delivery only, while a sender wanting one relay sets it to at least 2. A route is invalid if <tt>len(route_history) - 1 &gt; max_hops</tt>, the local peer is already present, or the next peer is already present. An invalid route is rejected without forwarding.</t>
+      </section>
+      <section anchor="peer-registry" numbered="true">
+        <name>Peer Registry Extension and Route Selection</name>
+        <t>A version 1.1.0 peer record contains <tt>peer_id</tt>, <tt>host</tt>, <tt>port</tt>, <tt>public_key_b64</tt>, <tt>via_peer_ids</tt>, and <tt>last_seen</tt>. The <tt>via_peer_ids</tt> field is an ordered list of peers through which the address is reachable. It is a routing hint rather than authorization. An empty or absent value means direct reachability is expected. Registry data by itself does not establish identity; entries <bcp14>MUST</bcp14> be locally pinned or authenticated out of band.</t>
+        <t>A peer <bcp14>MUST NOT</bcp14> select a route with a repeated ID. When multiple routes are available, it filters routes violating the preceding route rules, selects the fewest remaining hops, and breaks a tie using lexicographic order of the complete peer-ID path. Reachability and phase metrics can first remove unavailable routes, but cannot change this deterministic tie-break among remaining paths.</t>
+      </section>
+    </section>
+
+    <section anchor="delivery" numbered="true">
+      <name>Delivery Algorithm and Recipient Processing</name>
+      <section anchor="sender-loop" numbered="true">
+        <name>Sender Loop and Delivery Attempt</name>
+        <t>The sender selects up to ten outbox entries in <tt>pending</tt> state whose <tt>next_attempt_at</tt> is absent or due, ordered by creation time. It marks each candidate inflight, attempts delivery or forwarding, and handles the result. In one-shot operation, no candidates terminates the loop; otherwise the peer waits and continues.</t>
+        <t>For a delivery attempt, the peer looks up the destination and <tt>via_peer_ids</tt>, selects a valid deterministic route, and POSTs the current envelope to <tt>http://peer.host:peer.port/inbox</tt> with a 30-second timeout. A timeout, connection refusal, or other transport failure is a <tt>RETRYABLE_ERROR</tt>. For a 200 response, the sender parses the ack and verifies the pinned recipient signature, <tt>acked_msg_id</tt>, <tt>acked_origin_cid</tt>, and route binding.</t>
+      </section>
+      <section anchor="transit-recipient" numbered="true">
+        <name>Transit and Recipient Actions</name>
+        <t>A transit peer verifies the origin and every forwarding record, applies loop and hop checks, durably writes its transit record, appends its forwarding record, recomputes the current CID, and queues the next hop. It returns a signed forwarding receipt only after the durable write succeeds. If no valid next hop exists, it returns <tt>NO_ROUTE</tt> and retains the message in <tt>pending</tt> until policy marks it dead or expired.</t>
+        <t>On POST to <tt>/inbox</tt>, a recipient parses JSON and performs the applicable dedup lookup first. For a nonduplicate it verifies the origin signature and forwarding signatures; recomputes and compares CIDs; checks recipient match, phase anchor, lapse monotonicity, route history, hop budget, type, and body length; then starts a transaction. The transaction inserts the inbox record, updates the peer's last lapse, and persists the cached ack before commit. It returns 200 with canonical ack JSON only after a successful commit.</t>
+      </section>
+      <section anchor="result-handling" numbered="true">
+        <name>Result Handling</name>
+        <t><tt>SUCCESS(ack)</tt> marks an entry acked and stores the ack. <tt>RETRYABLE_ERROR</tt> increments attempts, computes the next delay, and returns the entry to pending. <tt>HARD_ERROR</tt> marks it dead and records the reason. <tt>LOOP_DETECTED</tt>, <tt>MAX_HOPS_EXCEEDED</tt>, <tt>INVALID_ORIGIN</tt>, and <tt>INVALID_FORWARDING_RECORD</tt> are hard errors. An entry reaching 20 attempts is dead regardless of other outcome handling.</t>
+      </section>
+    </section>
+
+    <section anchor="receipts" numbered="true">
+      <name>Receipt Format and External Provenance</name>
+      <t>Every successful final delivery produces a signed recipient ack. The sender and transit peers can additionally create outbound or forwarding receipts. An outbound receipt contains <tt>receipt_id</tt> (UUID v4), <tt>msg_id</tt>, sender and recipient peer IDs, <tt>input_hash</tt> (sha256 of canonical origin envelope), <tt>origin_cid</tt>, <tt>state_hash</tt> (sha256 of outbox state), <tt>rule_set_version</tt> equal to <tt>PHARO-LAPSE-1.1.0</tt>, <tt>authority_state</tt> equal to <tt>NOT_CONFIGURED</tt> or <tt>OPERATOR_APPROVED</tt>, <tt>model_inference</tt> equal to false, <tt>external_ai</tt> equal to false, phase, lapse, route history, max hops, <tt>result_state</tt> equal to <tt>acked</tt>, <tt>queued</tt>, <tt>dead</tt>, or <tt>expired</tt>, and an Ed25519 signature over canonical JSON.</t>
+      <t>Given the same input envelope, outbox state, phase, lapse, and route history, a receipt <bcp14>MUST</bcp14> be byte-identical. OpenTimestamps proofs can be retained separately to provide externally verifiable evidence that a file existed before an attested time <xref target="OTS"/>. Such a proof is not part of envelope validity, receipt validity, message delivery, or the protocol's security model.</t>
+    </section>
+
+    <section anchor="compatibility-implementation" numbered="true">
+      <name>Compatibility, Implementation, and Verification Requirements</name>
+      <section anchor="historical-gates" numbered="true">
+        <name>Historical Gate Mapping</name>
+        <t>Version 1.1.0 retains version 1.0 direct-path compatibility. For the historical transport gate, a valid version 1.1.0 receipt must show an actual HTTP exchange over a WireGuard overlay while public Internet access is unavailable. For the signed-envelope and ack gate, direct delivery remains compatible and verifies <tt>phase_anchor</tt> where version 1.1.0 extensions are present. For crash recovery, senders and transit peers recover inflight entries to pending, and a transit crash does not create two forwarding records or two next-hop application actions. For exactly-once delivery, final recipients deduplicate by <tt>msg_id</tt> and transit peers deduplicate by (<tt>msg_id</tt>, <tt>origin_cid</tt>) while returning a cached forwarding result without forwarding twice.</t>
+        <t>Historical version 1.0 gate receipts are not executable tests and cannot be represented as fresh version 1.1.0 executions. A future live version 1.1.0 gate receipt must contain its commit hash, test command, environment, message IDs, CIDs, route history, and UTC timestamps.</t>
+      </section>
+      <section anchor="test-requirements" numbered="true">
+        <name>Executable Test Requirements</name>
+        <t>A version 1.1.0 implementation <bcp14>MUST</bcp14> provide executable tests for direct version 1.0-compatible delivery with absent extensions; phase-anchor mismatch rejection; origin-signature rejection after body, phase, lapse, or hop-budget mutation; one-relay forwarding with stable origin CID and changed current CID; forwarding-signature verification; repeated-peer loop rejection; hop-budget rejection; transit crash recovery without duplicate forwarding; final-recipient deduplication with cached ack; deterministic route selection; parsing of registry <tt>via_peer_ids</tt>; and backward-compatible direct delivery under the four historical gates.</t>
+      </section>
+      <section anchor="implementation-notes" numbered="true">
+        <name>Implementation Notes</name>
+        <t>The reference implementation uses SQLite with WAL journaling. Its outbox and inbox are single tables keyed by <tt>msg_id</tt>. A version 1.1.0 implementation adds transit records, forwarding records, origin CID, current CID, max hops, route history, and <tt>via_peer_ids</tt>. Indexes on state, next-attempt time, peer ID, and origin CID support the delivery loop. A single-threaded loop is permitted; concurrent peer delivery is optional.</t>
+      </section>
+    </section>
+
+    <section anchor="security" numbered="true">
+      <name>Security Considerations</name>
+      <t>Pharo-Lapse assumes a passive transport eavesdropper, an active man-in-the-middle, replay attempts, impersonation attempts, and crashes at arbitrary points. It relies on transport for confidentiality, envelope and forwarding signatures plus CID verification for integrity, deduplication and lapse monotonicity for replay handling, local pins for identity verification, route history and hop budget for loop prevention, and durable recovery for crashes.</t>
+      <t>It does not assume resilience to endpoint compromise, transport denial of service, or operator error. Physical seizure, endpoint compromise, theft of a software-held key, revocation lag, side-channel leakage, route exhaustion, and denial of service remain residual risks. Implementations <bcp14>SHOULD</bcp14> use hardware-backed keys, signed pin updates, per-peer rate limits, queue-size caps, and operator-visible route-rejection logs.</t>
+      <t>The design eliminates a prompt channel and shell invocation from protocol processing. SQL operations use parameterized queries. Origin and current CID checks protect against modification, and no central authority creates a central-compromise dependency. Implementers are responsible for safe JSON parsing, duplicate-key rejection, constant-time cryptographic implementations where applicable, secure private-key operations, durable storage behavior, and transport configuration. Ed25519 relies on <xref target="RFC8032"/>; transports based on Curve25519 use the functions specified in <xref target="RFC7748"/> where applicable.</t>
+    </section>
+
+    <section anchor="iana" numbered="true">
+      <name>IANA Considerations</name>
+      <t>This document has no IANA actions.</t>
+    </section>
+
+    <section anchor="implementation-status" numbered="true">
+      <name>Implementation and Publication Status</name>
+      <t>This document describes the complete local version 1.1.0 protocol specification. The repository's historical receipts are evidence for version 1.0 runs only. At this document's preparation, no executable harness and two-device overlay were available to re-run the gates under version 1.1.0 semantics. No live version 1.1.0 test, deployment, telemetry record, IETF submission, or publication is asserted by this document.</t>
+    </section>
+
+    <section anchor="acknowledgments" numbered="true">
+      <name>Acknowledgments</name>
+      <t>The protocol name combines Pharo, referring to persistent pheromone trails, with lapse, an interval between valid states. The protocol was designed and implemented by Tyler Morris at Nexinus RI Systems LLC.</t>
+    </section>
+  </middle>
+  <back>
+    <references>
+      <name>Normative References</name>
+      <reference anchor="RFC2119" target="https://www.rfc-editor.org/info/rfc2119">
+        <front>
+          <title>Key words for use in RFCs to Indicate Requirement Levels</title>
+          <author initials="S." surname="Bradner" fullname="Scott Bradner"><organization>Harvard University</organization></author>
+          <date month="March" year="1997"/>
+        </front>
+        <seriesInfo name="BCP" value="14"/>
+        <seriesInfo name="RFC" value="2119"/>
+        <seriesInfo name="DOI" value="10.17487/RFC2119"/>
+      </reference>
+      <reference anchor="RFC8032" target="https://www.rfc-editor.org/info/rfc8032">
+        <front>
+          <title>Edwards-Curve Digital Signature Algorithm (EdDSA)</title>
+          <author initials="S." surname="Josefsson" fullname="Simon Josefsson"><organization>SJD AB</organization></author>
+          <author initials="I." surname="Liusvaara" fullname="Ilari Liusvaara"><organization>Independent</organization></author>
+          <date month="January" year="2017"/>
+        </front>
+        <seriesInfo name="RFC" value="8032"/>
+        <seriesInfo name="DOI" value="10.17487/RFC8032"/>
+      </reference>
+      <reference anchor="CID" target="https://github.com/multiformats/cid">
+        <front>
+          <title>Content Identifiers (CIDs)</title>
+          <author fullname="Multiformats Project"><organization>Multiformats</organization></author>
+        </front>
+      </reference>
+    </references>
+    <references>
+      <name>Informative References</name>
+      <reference anchor="RFC7748" target="https://www.rfc-editor.org/info/rfc7748">
+        <front>
+          <title>Elliptic Curves for Security</title>
+          <author initials="A." surname="Langley" fullname="Adam Langley"><organization>Google</organization></author>
+          <author initials="M." surname="Hamburg" fullname="Mike Hamburg"><organization>Rambus Cryptography Research</organization></author>
+          <author initials="S." surname="Turner" fullname="Sean Turner"><organization>sn3rd</organization></author>
+          <date month="January" year="2016"/>
+        </front>
+        <seriesInfo name="RFC" value="7748"/>
+        <seriesInfo name="DOI" value="10.17487/RFC7748"/>
+      </reference>
+      <reference anchor="WIREGUARD" target="https://www.wireguard.com/papers/wireguard.pdf">
+        <front>
+          <title>WireGuard: Next Generation Kernel Network Tunnel</title>
+          <author initials="J." surname="Donenfeld" fullname="Jason A. Donenfeld"><organization>WireGuard</organization></author>
+          <date year="2017"/>
+        </front>
+        <seriesInfo name="NDSS" value="2017"/>
+      </reference>
+      <reference anchor="OTS" target="https://opentimestamps.org/">
+        <front>
+          <title>OpenTimestamps</title>
+          <author fullname="OpenTimestamps Project"><organization>OpenTimestamps</organization></author>
+        </front>
+      </reference>
+    </references>
+  </back>
+</rfc>

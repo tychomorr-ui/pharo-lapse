@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pharo-lapse.local/schemas/application-adapter-output-0.1.json",
+  "title": "Pharo-Lapse Application Adapter Output",
+  "description": "A proposed integration-boundary contract. It is not documentation of any product's existing API or CLI. A real, operator-supplied product adapter emits this object for an offline reference demonstration.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["product_id", "body"],
+  "properties": {
+    "product_id": {
+      "type": "string",
+      "enum": ["pd-pro", "task-force-pro", "recovery", "iwa-sage"]
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "description": "An adapter-produced application payload. The demonstration does not synthesize this value."
+    }
+  }
+}
