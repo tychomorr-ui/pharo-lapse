@@ -40,6 +40,14 @@ The v1.0.0 commit hash is anchored to Bitcoin block 970,786 via OpenTimestamps.
 Verify: ots verify pharo-lapse-commit.txt.ots pharo-lapse-commit.txt
 
 ---
+## Bitcoin Anchor — v1.1.0
 
+The v1.1.0 stack is anchored to Bitcoin block **971,007** via OpenTimestamps.
+
+- Block height: 971,007
+- Target: `pharo-lapse-v1.1.0-commit.txt`
+- Proof: `pharo-lapse-v1.1.0-commit.txt.ots`
+
+Verify: `ots info pharo-lapse-v1.1.0-commit.txt.ots`
 Author: Tyler Morris, Nexinus RI Systems LLC
 Date: 9-10 October 2026
