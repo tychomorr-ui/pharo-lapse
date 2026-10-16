@@ -1,6 +1,6 @@
 # Project Reclaim → Pharo-Lapse Integration
 
-**Status:** PENDING — transport identity and application contract are not yet verified.
+**Status:** READY for sanitized v1 reference events; live signed delivery remains PENDING.
 
 ## Correct project name
 
@@ -19,6 +19,28 @@ Project Reclaim event
   -> exactly-once recipient deduplication
 ```
 
+## v1 reference event contract
+
+The first reference event is deliberately non-sensitive and contains no location field:
+
+```json
+{
+  "event_id": "PR-TEST-001",
+  "event_type": "status",
+  "created_at": "2026-10-16T16:00:00Z",
+  "priority": "routine",
+  "origin": "project-reclaim",
+  "message": "Project Reclaim reference status test"
+}
+```
+
+Allowed `event_type` values are `status`, `fire`, `medical`, `supply`, and `outage`.
+Allowed priorities are `routine`, `urgent`, and `critical`. The operator must set
+`PROJECT_RECLAIM_OPERATOR_APPROVAL=approved` before an event is serialized.
+
+Serialization is UTF-8 JSON with sorted keys, compact separators, and the schema
+marker `PROJECT-RECLAIM-EVENT/1`.
+
 ## Current verified boundary
 
 The repository already contains the canonical peer entry `project-reclaim` in
@@ -32,19 +54,20 @@ The repository also contains the signed multi-hop implementation:
 - `reference/forward_signed.py`
 - `reference/tests/test_signed_multihop.py`
 
-## Deliberate blocker
+## Remaining production blocker
 
-Project Reclaim's authoritative application event schema has not been provided.
-The adapter must not invent fields, identifiers, timestamps, severity values,
-or payload semantics. `adapter-template.py` therefore validates that an event
-file is present, then exits `BLOCKED` until all of the following are supplied:
+The v1 reference schema is implemented for sanitized testing. It is not yet an
+authoritative production schema. Production use remains blocked until all of the
+following are supplied:
 
-1. authoritative event schema and version;
-2. deterministic serialization rules;
-3. operator approval mechanism;
-4. configured recipient peer ID, overlay address, port, and pinned Ed25519 key;
-5. production queue and signed-envelope integration;
-6. a live signed delivery and acknowledgment receipt.
+1. Project Reclaim owner approval of the v1 schema or a replacement schema;
+2. configured recipient peer ID, overlay address, port, and pinned Ed25519 key;
+3. production queue and signed-envelope integration;
+4. a live signed delivery and acknowledgment receipt.
+
+`add-to-pharo-lapse.sh` intentionally uses the legacy unsigned reference SQLite
+queue and reports that limitation. It must not be described as signed production
+transport.
 
 ## What this package does not claim
 
@@ -53,9 +76,3 @@ file is present, then exits `BLOCKED` until all of the following are supplied:
 - It does not claim that Project Reclaim application events have been delivered.
 - It does not create or copy private keys.
 - It does not modify the protocol specification.
-
-## Required next implementation step
-
-Provide one real, non-sensitive Project Reclaim event example and its authoritative
-schema. Then implement the adapter serializer and test it against the shared
-Pharo-Lapse output contract before enabling any network delivery.
