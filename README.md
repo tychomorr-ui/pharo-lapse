@@ -51,3 +51,12 @@ The v1.1.0 stack is anchored to Bitcoin block **971,007** via OpenTimestamps.
 Verify: `ots info pharo-lapse-v1.1.0-commit.txt.ots`
 Author: Tyler Morris, Nexinus RI Systems LLC
 Date: 9-10 October 2026
+
+## License
+
+Pharo-Lapse is released under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the complete license and attribution notices.
+
+Unless a file or directory states otherwise, the protocol specification, reference implementations, and
+project documentation in this repository are covered by Apache-2.0. Third-party material retains its own
+applicable license and attribution requirements.
